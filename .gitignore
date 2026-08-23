@@ -1,0 +1,11 @@
+# OS / system files
+.DS_Store
+.thumbnail
+Thumbs.db
+
+# DSH session workspace metadata
+_ds/
+
+# Editor
+.vscode/
+.idea/
