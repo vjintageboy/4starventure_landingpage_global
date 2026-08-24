@@ -6,11 +6,25 @@
 <title>4Starventure — Global E-commerce, Fully Managed</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="preconnect" href="https://api.getlayers.ai" crossorigin>
+<link rel="preconnect" href="https://www.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+<!-- Perf: warm up every origin, then start fetching the WebGL module graph and the
+     heavy planet assets during HTML parse instead of after the CDN module tree resolves -->
+<link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/three@0.143.0/build/three.module.js" crossorigin>
+<link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/three@0.143.0/examples/jsm/loaders/GLTFLoader.js" crossorigin>
+<link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/three@0.143.0/examples/jsm/loaders/DRACOLoader.js" crossorigin>
+<link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/lenis@1.3.23/dist/lenis.mjs" crossorigin>
+<link rel="preload" as="fetch" crossorigin fetchpriority="high" href="https://api.getlayers.ai/storage/v1/object/public/public/assets/ascend-d9857ad1f2/planet.glb">
+<link rel="preload" as="fetch" crossorigin fetchpriority="high" href="https://api.getlayers.ai/storage/v1/object/public/public/assets/ascend-d9857ad1f2/planet-lights.glb">
+<link rel="preload" as="image" crossorigin href="https://api.getlayers.ai/storage/v1/object/public/public/assets/ascend-d9857ad1f2/planet-clouds.png">
+<link rel="preload" as="fetch" crossorigin href="https://www.gstatic.com/draco/versioned/decoders/1.5.5/draco_wasm_wrapper.js">
+<link rel="preload" as="fetch" crossorigin href="https://www.gstatic.com/draco/versioned/decoders/1.5.5/draco_decoder.wasm">
 <script type="importmap">
 { "imports": {
-  "three": "https://unpkg.com/three@0.143.0/build/three.module.js",
-  "three/examples/jsm/": "https://unpkg.com/three@0.143.0/examples/jsm/"
+  "three": "https://cdn.jsdelivr.net/npm/three@0.143.0/build/three.module.js",
+  "three/examples/jsm/": "https://cdn.jsdelivr.net/npm/three@0.143.0/examples/jsm/"
 }}
 </script>
 <style>
@@ -484,16 +498,9 @@ html.lenis,html.lenis body{height:auto}
 
 <script type="module">
 import * as THREE from 'three';
-import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
-import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
-import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
-import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
-import { GammaCorrectionShader } from 'three/examples/jsm/shaders/GammaCorrectionShader.js';
-import { CopyShader } from 'three/examples/jsm/shaders/CopyShader.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import Lenis from 'https://unpkg.com/lenis@1.3.23/dist/lenis.mjs';
+import Lenis from 'https://cdn.jsdelivr.net/npm/lenis@1.3.23/dist/lenis.mjs';
 
 /* ---------- year ---------- */
 document.getElementById('copyright').textContent = '© ' + new Date().getFullYear() + ' 4Starventure, Inc. — Built among the stars.';
@@ -590,20 +597,17 @@ float snoise(vec3 v){
 const canvas = document.querySelector('.planet-canvas');
 let W = window.innerWidth, H = window.innerHeight;
 
-const renderer = new THREE.WebGL1Renderer({ canvas, antialias:true });
-renderer.setPixelRatio(window.devicePixelRatio);
+const renderer = new THREE.WebGL1Renderer({ canvas, antialias:false, powerPreference:'high-performance' });
+// cap DPR at 1.75 — beyond that the fullscreen post pass costs 30%+ more fill for no visible gain
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
 renderer.setSize(W, H);
 renderer.outputEncoding = THREE.sRGBEncoding;
-renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.VSMShadowMap;
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x000000);
 
 const camera = new THREE.PerspectiveCamera(40, W/H, 0.1, 200);
 camera.position.set(0,0,8);
-camera.layers.enable(LAYERS.TORUS_SCENE);
-camera.layers.enable(LAYERS.BLOOM_SCENE);
 camera.layers.enable(LAYERS.ENTIRE_SCENE);
 scene.add(camera);
 
@@ -616,15 +620,17 @@ dir.layers.set(LAYERS.ENTIRE_SCENE);
 scene.add(dir);
 
 /* FinalPass shader */
-const FinalPass = {
-  uniforms: {
-    iTime:{value:0}, tDiffuse:{value:null}, torusTexture:{value:null}, bloomTexture:{value:null}, haloTexture:{value:null},
-    uBg:{value:hexToVec3(CONFIG.bgColor)}, uFlameA:{value:hexToVec3(CONFIG.flameColor)},
-    uFlameB:{value:hexToVec3(CONFIG.flameColor2)}, uFlameAmt:{value:CONFIG.flameAmt},
-  },
+const finalUniforms = {
+  iTime:{value:0}, tDiffuse:{value:null},
+  uBg:{value:hexToVec3(CONFIG.bgColor)}, uFlameA:{value:hexToVec3(CONFIG.flameColor)},
+  uFlameB:{value:hexToVec3(CONFIG.flameColor2)}, uFlameAmt:{value:CONFIG.flameAmt},
+};
+const finalComposite = new THREE.ShaderMaterial({
+  uniforms: finalUniforms,
+  depthWrite:false, depthTest:false,
   vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position, 1.0); }`,
   fragmentShader: `
-    uniform float iTime; uniform sampler2D tDiffuse; uniform sampler2D bloomTexture; uniform sampler2D torusTexture; uniform sampler2D haloTexture;
+    uniform float iTime; uniform sampler2D tDiffuse;
     uniform vec3 uBg; uniform vec3 uFlameA; uniform vec3 uFlameB; uniform float uFlameAmt;
     varying vec2 vUv;
     vec3 warp3d(vec3 pos, float t){ float curv=.8,a=1.9,b=0.7; pos*=2.;
@@ -639,43 +645,26 @@ const FinalPass = {
       flame *= smoothstep(0.25, 1., abs(uv.y));
       float md = smoothstep(-0.7, 1., -uv.y*uv.x); flame *= md*md;
       vec3 bg = uBg * (1.0 - 0.4 * length(uv));
-      vec3 halo = texture2D(haloTexture, vUv).xyz;
-      gl_FragColor = vec4(bg + flame*uFlameAmt + texture2D(bloomTexture, vUv).xyz + texture2D(torusTexture, vUv).xyz + texture2D(tDiffuse, vUv).xyz + halo, 1.);
+      gl_FragColor = vec4(bg + flame*uFlameAmt + texture2D(tDiffuse, vUv).xyz, 1.);
     }`,
-};
+});
 
-/* composers */
-const torusComposer = new EffectComposer(renderer);
-torusComposer.renderToScreen = false;
-torusComposer.addPass(new RenderPass(scene, camera));
-torusComposer.addPass(new ShaderPass(GammaCorrectionShader));
-torusComposer.addPass(new UnrealBloomPass(new THREE.Vector2(W,H), 0.22, 0.2, 0));
-torusComposer.addPass(new ShaderPass(CopyShader));
+/* Perf: the old pipeline rendered the scene three times per frame through three
+   EffectComposers — two of them targeted layers with no objects and only added black.
+   Now: one scene render into a render target, then a single fullscreen composite. */
+const rtScene = new THREE.WebGLRenderTarget(2, 2, { type: THREE.HalfFloatType });
+function syncRenderTargetSize(){
+  const pr = renderer.getPixelRatio();
+  rtScene.setSize(Math.max(2, Math.floor(W * pr)), Math.max(2, Math.floor(H * pr)));
+}
+syncRenderTargetSize();
+finalUniforms.tDiffuse.value = rtScene.texture;
 
-const bloomComposer = new EffectComposer(renderer);
-bloomComposer.renderToScreen = false;
-bloomComposer.addPass(new RenderPass(scene, camera));
-bloomComposer.addPass(new UnrealBloomPass(new THREE.Vector2(W,H), 0.5, 0.6, 0));
-bloomComposer.addPass(new ShaderPass(GammaCorrectionShader));
-
-const finalPass = new ShaderPass(FinalPass);
-finalPass.uniforms.bloomTexture.value = bloomComposer.renderTarget1.texture;
-finalPass.uniforms.torusTexture.value = torusComposer.renderTarget1.texture;
-const finalComposer = new EffectComposer(renderer);
-finalComposer.addPass(new RenderPass(scene, camera));
-finalComposer.addPass(finalPass);
-
-/* orbit controls (disabled, never captures pointer) */
-const controls = new OrbitControls(camera, renderer.domElement);
-controls.enableDamping = true;
-controls.dampingFactor = 0.06;
-controls.enablePan = false;
-controls.enabled = false;
-controls.autoRotate = true;
-controls.autoRotateSpeed = CONFIG.autoRotate;
-controls.minDistance = 3.5;
-controls.maxDistance = 16;
-controls.target.set(0,0,0);
+const postScene = new THREE.Scene();
+const postQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), finalComposite);
+postQuad.frustumCulled = false;
+postScene.add(postQuad);
+const postCamera = new THREE.Camera();
 
 /* scroll storytelling stops */
 const STOPS_X = [{p:0,v:0},{p:0.32,v:-3.1},{p:0.64,v:3.2},{p:1,v:0}];
@@ -923,7 +912,6 @@ function buildMotes(){
   points.onBeforeRender = ()=>{
     mat.uniforms.uTime.value = performance.now()/1000 * CONFIG.atmoSpeed * 8;
     points.position.copy(camera.position);
-    finalPass.uniforms.iTime.value = performance.now()/1000;
   };
   scene.add(points);
   return { points, mat };
@@ -986,15 +974,18 @@ function buildMarkers(mesh){
   let index = geom.index;
   const triCount = index ? index.count/3 : posAttr.count/3;
 
-  // read base color texture into canvas
+  // read base color texture into a downscaled canvas — we only need land/ocean per sample,
+  // not full-res pixels (was: whole texture copied into an ImageData)
   const baseTex = mesh.material.map;
   if (!baseTex || !baseTex.image){ return null; }
   const img = baseTex.image;
-  const cw = img.width, ch = img.height;
+  const dscale = Math.min(1, 1024 / img.width);
   const cvs = document.createElement('canvas');
-  cvs.width = cw; cvs.height = ch;
-  const ctx = cvs.getContext('2d');
-  ctx.drawImage(img, 0, 0, cw, ch);
+  cvs.width = Math.max(1, Math.round(img.width * dscale));
+  cvs.height = Math.max(1, Math.round(img.height * dscale));
+  const ctx = cvs.getContext('2d', { willReadFrequently:true });
+  ctx.drawImage(img, 0, 0, cvs.width, cvs.height);
+  const cw = cvs.width, ch = cvs.height;
   let data;
   try { data = ctx.getImageData(0,0,cw,ch).data; }
   catch(e){ return null; }
@@ -1101,36 +1092,42 @@ const stars = buildStars();
 const cloudMeshes = buildClouds();
 let markers = null;
 
-gltfLoader.load(PLANET_LIGHTS_GLB, (lightsGltf)=>{
-  let nightTex = null;
-  lightsGltf.scene.traverse(o=>{ if (o.isMesh && !nightTex){ nightTex = o.material.map; } });
+// Perf: fetch both GLBs in parallel (was: lights first, planet only after it parsed)
+const loadGltf = (url)=> new Promise((res, rej)=> gltfLoader.load(url, res, undefined, rej));
+Promise.all([
+  loadGltf(PLANET_LIGHTS_GLB).then((lightsGltf)=>{
+    let nightTex = null;
+    lightsGltf.scene.traverse(o=>{ if (o.isMesh && !nightTex){ nightTex = o.material.map; } });
+    return nightTex;
+  }).catch(()=>null),
+  loadGltf(PLANET_GLB),
+])
+.then(([nightTex, gltf])=>{
+  let mesh = null;
+  gltf.scene.traverse(o=>{ if (o.isMesh && !mesh) mesh = o; });
+  if (!mesh) return;
+  mesh.geometry.computeBoundingSphere();
+  const r0 = mesh.geometry.boundingSphere.radius;
+  const s = CONFIG.planetRadius / r0;
+  mesh.scale.setScalar(s);
 
-  gltfLoader.load(PLANET_GLB, (gltf)=>{
-    let mesh = null;
-    gltf.scene.traverse(o=>{ if (o.isMesh && !mesh) mesh = o; });
-    if (!mesh) return;
-    mesh.geometry.computeBoundingSphere();
-    const r0 = mesh.geometry.boundingSphere.radius;
-    const s = CONFIG.planetRadius / r0;
-    mesh.scale.setScalar(s);
+  const mat = mesh.material.clone();
+  mesh.material = mat;
+  applyPlanetShader(mat, nightTex);
+  mesh.layers.set(LAYERS.ENTIRE_SCENE);
 
-    const mat = mesh.material.clone();
-    mesh.material = mat;
-    applyPlanetShader(mat, nightTex);
-    mesh.layers.set(LAYERS.ENTIRE_SCENE);
+  planetGroup.add(mesh);
+  planetMesh = mesh;
+  planetLoaded = true;
+  cloudGroup.visible = true;
+  entryStartTime = performance.now()/1000;
 
-    planetGroup.add(mesh);
-    planetMesh = mesh;
-    planetLoaded = true;
-    cloudGroup.visible = true;
-    entryStartTime = performance.now()/1000;
-
-    // markers depend on base texture being decoded
-    const startMarkers = ()=>{ markers = buildMarkers(mesh); };
-    if (mat.map && mat.map.image && mat.map.image.width){ startMarkers(); }
-    else if (mat.map){ const im = mat.map.image; if (im){ im.onload = startMarkers; setTimeout(startMarkers, 400); } else setTimeout(startMarkers, 400); }
-  });
-});
+  // markers depend on base texture being decoded
+  const startMarkers = ()=>{ markers = buildMarkers(mesh); };
+  if (mat.map && mat.map.image && mat.map.image.width){ startMarkers(); }
+  else if (mat.map){ const im = mat.map.image; if (im){ im.onload = startMarkers; setTimeout(startMarkers, 400); } else setTimeout(startMarkers, 400); }
+})
+.catch(err=>console.warn('Planet assets failed to load:', err));
 
 /* ---------- scroll-driven choreography state ---------- */
 let curP = 0, curX = STOPS_X[0].v, curY = STOPS_Y[0].v, curS = STOPS_S[0].v;
@@ -1178,6 +1175,7 @@ function animate(){
   cloudTime += dt/20; cloudTimeU.value = cloudTime;
   starTime += dt; stars.mat.uniforms.uTime.value = starTime;
   markerTime += dt; if (markers) markers.mat.uniforms.uTime.value = markerTime;
+  finalUniforms.iTime.value = now;
 
   // cloud spin
   cloudMeshes.forEach(m=>{ m.rotation.y += dt * m.userData.spin; });
@@ -1185,22 +1183,21 @@ function animate(){
   // halo billboard
   glowMesh.quaternion.copy(camera.quaternion);
 
-  controls.update();
-
-  // render composers
-  camera.layers.set(LAYERS.TORUS_SCENE); torusComposer.render();
-  camera.layers.set(LAYERS.BLOOM_SCENE); bloomComposer.render();
-  camera.layers.set(LAYERS.ENTIRE_SCENE); finalComposer.render();
+  // render: single scene pass into RT, then one fullscreen composite to screen
+  renderer.setRenderTarget(rtScene);
+  renderer.render(scene, camera);
+  renderer.setRenderTarget(null);
+  renderer.render(postScene, postCamera);
 }
 animate();
 
 /* ---------- resize ---------- */
 function onResize(){
   W = window.innerWidth; H = window.innerHeight;
-  camera.aspect = W/H; camera.updateProjectionMatrix();
-  const pr = window.devicePixelRatio;
+  const pr = Math.min(window.devicePixelRatio || 1, 1.75);
   renderer.setPixelRatio(pr); renderer.setSize(W,H);
-  [torusComposer, bloomComposer, finalComposer].forEach(c=>{ c.setPixelRatio(pr); c.setSize(W,H); });
+  camera.aspect = W/H; camera.updateProjectionMatrix();
+  syncRenderTargetSize();
   motes.mat.uniforms.uRes.value.set(W,H);
   stars.mat.uniforms.uRes.value.set(W,H);
   if (markers) markers.mat.uniforms.uRes.value.set(W,H);
