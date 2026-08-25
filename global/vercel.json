@@ -1,3 +1,5 @@
 {
-  "trailingSlash": true
+  "redirects": [
+    { "source": "/global", "destination": "/global/", "permanent": true }
+  ]
 }
