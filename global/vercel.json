@@ -1,5 +1,0 @@
-{
-  "redirects": [
-    { "source": "/global", "destination": "/global/", "permanent": true }
-  ]
-}
